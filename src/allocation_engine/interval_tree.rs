@@ -529,11 +529,11 @@ impl IntervalTree {
                 if node.node_state.is_free() {
                     return Ok(node);
                 }
-                if let Some(ref left) = node.left {
-                    queue.push(left);
-                }
                 if let Some(ref right) = node.right {
                     queue.push(right);
+                }
+                if let Some(ref left) = node.left {
+                    queue.push(left);
                 }
             }
         }
@@ -678,7 +678,6 @@ impl IntervalTree {
             .ok_or(Error::ResourceNotAvailable)?;
 
         let node_key = node.key;
-
 
         // Allocate a resource from the node, no need to split the candidate node.
         if node_key.start() == key.start() && node_key.end() == key.end() {
