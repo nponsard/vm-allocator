@@ -514,7 +514,7 @@ impl IntervalTree {
         }
     }
 
-    fn insert(&mut self, key: RangeInclusive, node_state: NodeState) -> Result<()> {
+    pub fn insert(&mut self, key: RangeInclusive, node_state: NodeState) -> Result<()> {
         match self.root.take() {
             None => self.root = Some(Box::new(InnerNode::new(key, node_state))),
             Some(node) => self.root = Some(node.insert(key, node_state)?),
