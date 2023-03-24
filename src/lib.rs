@@ -82,7 +82,7 @@ mod id_allocator;
 use std::{cmp::max, cmp::min, result};
 use thiserror::Error;
 
-use crate::allocation_engine::NodeState;
+pub use crate::allocation_engine::NodeState;
 pub use crate::{address_allocator::AddressAllocator, id_allocator::IdAllocator};
 
 /// Default alignment that can be used for creating a `Constraint`.
