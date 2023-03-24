@@ -118,11 +118,11 @@ impl InnerNode {
     /// Returns the nodes that are in the specified state.
     pub fn get_nodes_with_state(&self, node_state: NodeState) -> Vec<&RangeInclusive> {
         let mut nodes = Vec::new();
-        if self.node_state == node_state {
-            nodes.push(&self.key);
-        }
         if let Some(left) = &self.left {
             nodes.append(&mut left.get_nodes_with_state(node_state));
+        }
+        if self.node_state == node_state {
+            nodes.push(&self.key);
         }
         if let Some(right) = &self.right {
             nodes.append(&mut right.get_nodes_with_state(node_state));
@@ -551,18 +551,35 @@ impl IntervalTree {
         let mut allocated = Vec::new();
         let mut remaining = size;
 
+        let mut free_nodes = vec![]; 
+        
+        {
+
+            free_nodes = self
+            .root.as_ref()
+            .ok_or(Error::ResourceNotAvailable)?
+            .get_nodes_with_state(NodeState::Free);
+    }
+
+        let mut free_nodes_index = 0;
+        let lenght = free_nodes.len();
+
         while remaining > 0 {
-            let node = self.get_first_free_slot()?;
-            let node_key = node.key;
-            
+            if free_nodes_index > lenght {
+                return Err(Error::Overflow);
+            }
+
+            let node_key = free_nodes[free_nodes_index];
+
+            free_nodes_index += 1;
+
             let range_start = align_up(node_key.start(), align)?;
 
             let range_end = align_down(node_key.end(), align)?;
 
-            if range_end>=range_start {
+            if range_start > range_end {
                 continue;
             }
-
 
             let key = RangeInclusive::new(range_start, range_end)?;
             let allocated_size = std::cmp::min(key.len(), remaining);
