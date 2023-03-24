@@ -45,7 +45,9 @@ pub enum NodeState {
     /// Node is free.
     Free,
     /// reserved areas (BIOS, APIC, etc.)
-    Reserved,
+    ReservedNotMapped,
+    /// reserved but should be mapped
+    ReservedMapped,
     /// Node is allocated.
     Ram,
     /// MMIO
@@ -552,10 +554,14 @@ impl IntervalTree {
         while remaining > 0 {
             let node = self.get_first_free_slot()?;
             let node_key = node.key;
+            
             let range_start = align_up(node_key.start(), align)?;
-            let key = RangeInclusive::new(range_start, node_key.end())?;
+
+            let range_end = align_down(node_key.end(), align)?;
+
+            let key = RangeInclusive::new(range_start, range_end)?;
             let allocated_size = std::cmp::min(key.len(), remaining);
-            let allocated_key = RangeInclusive::new(key.start(), key.start() + allocated_size - 1)?;
+            let allocated_key = RangeInclusive::new(key.start(), key.start() + allocated_size)?;
             self.allocate_at(allocated_key, node_state)?;
             allocated.push(allocated_key);
             remaining -= allocated_size;
