@@ -44,8 +44,12 @@ pub fn align_up(address: u64, alignment: u64) -> Result<u64> {
 pub enum NodeState {
     /// Node is free.
     Free,
+    /// reserved areas (BIOS, APIC, etc.)
+    Reserved,
     /// Node is allocated.
-    Allocated,
+    Ram,
+    /// MMIO
+    Mmio,
 }
 
 impl NodeState {
@@ -279,22 +283,22 @@ impl InnerNode {
     /// find an existing node with the state `NodeState::Free` that satisfies
     /// all constraints of an allocation request. The recursion is safe as we
     /// have in place a maximum height for the tree.
-    fn mark_as_allocated(&mut self, key: &RangeInclusive) -> Result<()> {
+    fn mark_as_allocated(&mut self, key: &RangeInclusive, node_state: NodeState) -> Result<()> {
         match self.key.cmp(key) {
             Ordering::Equal => {
                 if self.node_state != NodeState::Free {
                     return Err(Error::InvalidStateTransition(self.key, self.node_state));
                 }
-                self.node_state = NodeState::Allocated;
+                self.node_state = node_state;
                 Ok(())
             }
             Ordering::Less => match self.right.as_mut() {
                 None => Err(Error::ResourceNotAvailable),
-                Some(node) => node.mark_as_allocated(key),
+                Some(node) => node.mark_as_allocated(key, node_state),
             },
             Ordering::Greater => match self.left.as_mut() {
                 None => Err(Error::ResourceNotAvailable),
-                Some(node) => node.mark_as_allocated(key),
+                Some(node) => node.mark_as_allocated(key, node_state),
             },
         }
     }
@@ -518,10 +522,10 @@ impl IntervalTree {
         Ok(())
     }
 
-    fn mark_as_allocated(&mut self, key: &RangeInclusive) -> Result<()> {
+    fn mark_as_allocated(&mut self, key: &RangeInclusive, node_state: NodeState) -> Result<()> {
         match self.root.as_mut() {
             None => (),
-            Some(node) => node.mark_as_allocated(key)?,
+            Some(node) => node.mark_as_allocated(key, node_state)?,
         };
         Ok(())
     }
@@ -543,7 +547,11 @@ impl IntervalTree {
     /// such that the RangeInclusive representing the desired memory slot will appear as
     /// an node with the state `NodeState::Allocated` while the leftovers of
     /// the previous node will be present in the tree as free nodes.
-    pub fn allocate(&mut self, constraint: Constraint) -> Result<RangeInclusive> {
+    pub fn allocate(
+        &mut self,
+        constraint: Constraint,
+        node_state: NodeState,
+    ) -> Result<RangeInclusive> {
         // Return ResourceNotAvailable if we can not get a reference to the
         // root node.
         let root = self.root.as_ref().ok_or(Error::ResourceNotAvailable)?;
@@ -562,7 +570,7 @@ impl IntervalTree {
 
         // Allocate a resource from the node, no need to split the candidate node.
         if node_key.start() == result.start() && node_key.len() == constraint.size {
-            self.mark_as_allocated(&node_key)?;
+            self.mark_as_allocated(&node_key, node_state)?;
             return Ok(node_key);
         }
 
@@ -583,7 +591,7 @@ impl IntervalTree {
             )?;
         }
 
-        self.insert(result, NodeState::Allocated)?;
+        self.insert(result, node_state)?;
         if result.end() < node_key.end() {
             self.insert(
                 RangeInclusive::new(
@@ -675,7 +683,7 @@ mod tests {
 
     #[test]
     fn test_is_free() {
-        let mut ns = NodeState::Allocated;
+        let mut ns = NodeState::Ram;
         assert!(!ns.is_free());
         ns = NodeState::Free;
         assert!(ns.is_free());
@@ -685,7 +693,7 @@ mod tests {
     fn test_search() {
         let mut tree = Box::new(InnerNode::new(
             RangeInclusive::new(0x100, 0x110).unwrap(),
-            NodeState::Allocated,
+            NodeState::Ram,
         ));
         let left_child = InnerNode::new(RangeInclusive::new(0x90, 0x99).unwrap(), NodeState::Free);
 
@@ -712,7 +720,7 @@ mod tests {
     fn test_search_superset() {
         let mut tree = Box::new(InnerNode::new(
             RangeInclusive::new(0x100, 0x110).unwrap(),
-            NodeState::Allocated,
+            NodeState::Ram,
         ));
         let right_child =
             InnerNode::new(RangeInclusive::new(0x200, 0x2FF).unwrap(), NodeState::Free);
@@ -780,7 +788,7 @@ mod tests {
     fn test_tree_insert_balanced() {
         let mut tree = Box::new(InnerNode::new(
             RangeInclusive::new(0x300, 0x310).unwrap(),
-            NodeState::Allocated,
+            NodeState::Ram,
         ));
         tree = tree
             .insert(RangeInclusive::new(0x100, 0x110).unwrap(), NodeState::Free)
@@ -798,7 +806,7 @@ mod tests {
         assert!(is_balanced(Some(tree)));
         tree = Box::new(InnerNode::new(
             RangeInclusive::new(0x300, 0x310).unwrap(),
-            NodeState::Allocated,
+            NodeState::Ram,
         ));
         tree = tree
             .insert(RangeInclusive::new(0x100, 0x110).unwrap(), NodeState::Free)
@@ -849,7 +857,7 @@ mod tests {
     fn test_tree_insert_intersect_negative() {
         let mut tree = Box::new(InnerNode::new(
             RangeInclusive::new(0x100, 0x200).unwrap(),
-            NodeState::Allocated,
+            NodeState::Ram,
         ));
         tree = tree
             .insert(RangeInclusive::new(0x201, 0x2FF).unwrap(), NodeState::Free)
@@ -882,17 +890,15 @@ mod tests {
     #[test]
     fn test_tree_insert_duplicate_negative() {
         let range = RangeInclusive::new(0x100, 0x200).unwrap();
-        let tree = Box::new(InnerNode::new(range, NodeState::Allocated));
+        let tree = Box::new(InnerNode::new(range, NodeState::Ram));
         let res = tree.insert(range, NodeState::Free);
         assert_eq!(res.unwrap_err(), Error::Overlap(range, range));
     }
 
     #[test]
     fn test_tree_stack_overflow_negative() {
-        let mut inner_node = InnerNode::new(
-            RangeInclusive::new(0x100, 0x200).unwrap(),
-            NodeState::Allocated,
-        );
+        let mut inner_node =
+            InnerNode::new(RangeInclusive::new(0x100, 0x200).unwrap(), NodeState::Ram);
         inner_node.height = 50;
         let tree = Box::new(inner_node);
         let res = tree.insert(RangeInclusive::new(0x100, 0x200).unwrap(), NodeState::Free);
@@ -902,24 +908,24 @@ mod tests {
     #[test]
     fn test_tree_mark_as_allocated_invalid_transition() {
         let range = RangeInclusive::new(0x100, 0x110).unwrap();
-        let mut tree = Box::new(InnerNode::new(range, NodeState::Allocated));
+        let mut tree = Box::new(InnerNode::new(range, NodeState::Ram));
         assert_eq!(
-            tree.mark_as_allocated(&range).unwrap_err(),
-            Error::InvalidStateTransition(range, NodeState::Allocated)
+            tree.mark_as_allocated(&range, NodeState::Ram).unwrap_err(),
+            Error::InvalidStateTransition(range, NodeState::Ram)
         );
     }
 
     #[test]
     fn test_tree_mark_as_allocated_resource_not_available() {
         let range = RangeInclusive::new(0x100, 0x110).unwrap();
-        let mut tree = Box::new(InnerNode::new(range, NodeState::Allocated));
+        let mut tree = Box::new(InnerNode::new(range, NodeState::Ram));
         assert_eq!(
-            tree.mark_as_allocated(&RangeInclusive::new(0x111, 0x112).unwrap())
+            tree.mark_as_allocated(&RangeInclusive::new(0x111, 0x112).unwrap(), NodeState::Ram)
                 .unwrap_err(),
             Error::ResourceNotAvailable
         );
         assert_eq!(
-            tree.mark_as_allocated(&RangeInclusive::new(0x90, 0x92).unwrap())
+            tree.mark_as_allocated(&RangeInclusive::new(0x90, 0x92).unwrap(), NodeState::Ram)
                 .unwrap_err(),
             Error::ResourceNotAvailable
         );
@@ -929,12 +935,12 @@ mod tests {
     fn test_tree_mark_as_allocated() {
         let range = RangeInclusive::new(0x100, 0x110).unwrap();
         let range2 = RangeInclusive::new(0x200, 0x2FF).unwrap();
-        let mut tree = Box::new(InnerNode::new(range, NodeState::Allocated));
+        let mut tree = Box::new(InnerNode::new(range, NodeState::Ram));
         tree = tree.insert(range2, NodeState::Free).unwrap();
-        assert!(tree.mark_as_allocated(&range2).is_ok());
+        assert!(tree.mark_as_allocated(&range2, NodeState::Ram).is_ok());
         assert_eq!(
             *tree.search(&range2).unwrap(),
-            InnerNode::new(range2, NodeState::Allocated)
+            InnerNode::new(range2, NodeState::Ram)
         );
     }
 
@@ -996,7 +1002,7 @@ mod tests {
             AllocPolicy::ExactMatch(0x8000000000000000),
         )
         .unwrap();
-        let res = tree.allocate(constraint);
+        let res = tree.allocate(constraint, NodeState::Ram);
         assert_eq!(res.unwrap_err(), Error::Overflow);
     }
 }

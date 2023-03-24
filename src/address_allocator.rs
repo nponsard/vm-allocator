@@ -8,7 +8,7 @@
 //! This module implements an allocation strategies for memory slots in an
 //! address space (for example MMIO and PIO).
 
-use crate::allocation_engine::IntervalTree;
+use crate::allocation_engine::{IntervalTree, NodeState};
 use crate::{AllocPolicy, Constraint, Error, RangeInclusive, Result};
 
 // Internal representation of AddressAllocator. Contains the managed address
@@ -61,9 +61,10 @@ impl AddressAllocator {
         size: u64,
         alignment: u64,
         policy: AllocPolicy,
+        node_state: NodeState,
     ) -> Result<RangeInclusive> {
         let constraint = Constraint::new(size, alignment, policy)?;
-        self.interval_tree.allocate(constraint)
+        self.interval_tree.allocate(constraint,node_state)
     }
 
     /// Deletes the specified memory slot or returns `ResourceNotAvailable` if
@@ -81,21 +82,21 @@ mod tests {
     fn test_regression_exact_match_length_check() {
         let mut pool = AddressAllocator::new(0x0, 0x2000).unwrap();
         let res = pool
-            .allocate(0x1000, 0x1000, AllocPolicy::ExactMatch(0x1000))
+            .allocate(0x1000, 0x1000, AllocPolicy::ExactMatch(0x1000),NodeState::Ram)
             .unwrap();
         assert_eq!(
-            pool.allocate(0x0, 0x1000, AllocPolicy::FirstMatch)
+            pool.allocate(0x0, 0x1000, AllocPolicy::FirstMatch,NodeState::Ram)
                 .unwrap_err(),
             Error::InvalidSize(0x0)
         );
         assert_eq!(
-            pool.allocate(0x1000, 0x1000, AllocPolicy::ExactMatch(0x3))
+            pool.allocate(0x1000, 0x1000, AllocPolicy::ExactMatch(0x3),NodeState::Ram)
                 .unwrap_err(),
             Error::UnalignedAddress
         );
         assert_eq!(res, RangeInclusive::new(0x1000, 0x1FFF).unwrap());
         let res = pool
-            .allocate(0x1000, 0x1000, AllocPolicy::ExactMatch(0x0))
+            .allocate(0x1000, 0x1000, AllocPolicy::ExactMatch(0x0),NodeState::Ram)
             .unwrap();
         assert_eq!(res, RangeInclusive::new(0x0, 0x0FFF).unwrap());
     }
@@ -120,7 +121,7 @@ mod tests {
     fn test_allocate_fails_alignment_zero() {
         let mut pool = AddressAllocator::new(0x1000, 0x10000).unwrap();
         assert_eq!(
-            pool.allocate(0x100, 0, AllocPolicy::FirstMatch)
+            pool.allocate(0x100, 0, AllocPolicy::FirstMatch,NodeState::Ram)
                 .unwrap_err(),
             Error::InvalidAlignment
         );
@@ -130,7 +131,7 @@ mod tests {
     fn test_allocate_fails_alignment_non_power_of_two() {
         let mut pool = AddressAllocator::new(0x1000, 0x10000).unwrap();
         assert_eq!(
-            pool.allocate(0x100, 200, AllocPolicy::FirstMatch)
+            pool.allocate(0x100, 200, AllocPolicy::FirstMatch,NodeState::Ram)
                 .unwrap_err(),
             Error::InvalidAlignment
         );
@@ -140,16 +141,16 @@ mod tests {
     fn test_allocate_fails_not_enough_space() {
         let mut pool = AddressAllocator::new(0x1000, 0x1000).unwrap();
         assert_eq!(
-            pool.allocate(0x800, 0x100, AllocPolicy::LastMatch).unwrap(),
+            pool.allocate(0x800, 0x100, AllocPolicy::LastMatch,NodeState::Ram).unwrap(),
             RangeInclusive::new(0x1800, 0x1FFF).unwrap()
         );
         assert_eq!(
-            pool.allocate(0x900, 0x100, AllocPolicy::FirstMatch)
+            pool.allocate(0x900, 0x100, AllocPolicy::FirstMatch,NodeState::Ram)
                 .unwrap_err(),
             Error::ResourceNotAvailable
         );
         assert_eq!(
-            pool.allocate(0x400, 0x100, AllocPolicy::FirstMatch)
+            pool.allocate(0x400, 0x100, AllocPolicy::FirstMatch,NodeState::Ram)
                 .unwrap(),
             RangeInclusive::new(0x1000, 0x13FF).unwrap()
         );
@@ -159,17 +160,17 @@ mod tests {
     fn test_allocate_with_alignment_first_ok() {
         let mut pool = AddressAllocator::new(0x1000, 0x1000).unwrap();
         assert_eq!(
-            pool.allocate(0x110, 0x100, AllocPolicy::FirstMatch)
+            pool.allocate(0x110, 0x100, AllocPolicy::FirstMatch,NodeState::Ram)
                 .unwrap(),
             RangeInclusive::new(0x1000, 0x110F).unwrap()
         );
         assert_eq!(
-            pool.allocate(0x100, 0x100, AllocPolicy::FirstMatch)
+            pool.allocate(0x100, 0x100, AllocPolicy::FirstMatch,NodeState::Ram)
                 .unwrap(),
             RangeInclusive::new(0x1200, 0x12FF).unwrap()
         );
         assert_eq!(
-            pool.allocate(0x10, 0x100, AllocPolicy::FirstMatch).unwrap(),
+            pool.allocate(0x10, 0x100, AllocPolicy::FirstMatch,NodeState::Ram).unwrap(),
             RangeInclusive::new(0x1300, 0x130F).unwrap()
         );
     }
@@ -179,19 +180,19 @@ mod tests {
         let mut pool_reverse = AddressAllocator::new(0x1000, 0x10000).unwrap();
         assert_eq!(
             pool_reverse
-                .allocate(0x110, 0x100, AllocPolicy::LastMatch)
+                .allocate(0x110, 0x100, AllocPolicy::LastMatch,NodeState::Ram)
                 .unwrap(),
             RangeInclusive::new(0x10E00, 0x10F0F).unwrap()
         );
         assert_eq!(
             pool_reverse
-                .allocate(0x100, 0x100, AllocPolicy::LastMatch)
+                .allocate(0x100, 0x100, AllocPolicy::LastMatch,NodeState::Ram)
                 .unwrap(),
             RangeInclusive::new(0x10D00, 0x10DFF).unwrap()
         );
         assert_eq!(
             pool_reverse
-                .allocate(0x10, 0x100, AllocPolicy::LastMatch)
+                .allocate(0x10, 0x100, AllocPolicy::LastMatch,NodeState::Ram)
                 .unwrap(),
             RangeInclusive::new(0x10C00, 0x10C0F).unwrap()
         );
@@ -202,26 +203,26 @@ mod tests {
         let mut pool = AddressAllocator::new(0x1000, 0x1000).unwrap();
         // First range is [0x1000:0x17FF]
         assert_eq!(
-            pool.allocate(0x800, 0x100, AllocPolicy::FirstMatch)
+            pool.allocate(0x800, 0x100, AllocPolicy::FirstMatch,NodeState::Ram)
                 .unwrap(),
             RangeInclusive::new(0x1000, 0x17FF).unwrap()
         );
         // Second range is [0x1A00:0x1BFF]
         assert_eq!(
-            pool.allocate(0x200, 0x100, AllocPolicy::ExactMatch(0x1A00))
+            pool.allocate(0x200, 0x100, AllocPolicy::ExactMatch(0x1A00),NodeState::Ram)
                 .unwrap(),
             RangeInclusive::new(0x1A00, 0x1BFF).unwrap()
         );
         // There is 0x200 between the first 2 ranges.
         // We ask for an available address but the range is too big
         assert_eq!(
-            pool.allocate(0x800, 0x100, AllocPolicy::ExactMatch(0x1800))
+            pool.allocate(0x800, 0x100, AllocPolicy::ExactMatch(0x1800),NodeState::Ram)
                 .unwrap_err(),
             Error::ResourceNotAvailable
         );
         // We ask for an available address, with a small enough range
         assert_eq!(
-            pool.allocate(0x100, 0x100, AllocPolicy::ExactMatch(0x1800))
+            pool.allocate(0x100, 0x100, AllocPolicy::ExactMatch(0x1800),NodeState::Ram)
                 .unwrap(),
             RangeInclusive::new(0x1800, 0x18FF).unwrap()
         );
@@ -231,14 +232,14 @@ mod tests {
     fn test_tree_allocate_address_free_and_realloc() {
         let mut pool = AddressAllocator::new(0x1000, 0x1000).unwrap();
         assert_eq!(
-            pool.allocate(0x800, 0x100, AllocPolicy::FirstMatch)
+            pool.allocate(0x800, 0x100, AllocPolicy::FirstMatch,NodeState::Ram)
                 .unwrap(),
             RangeInclusive::new(0x1000, 0x17FF).unwrap()
         );
 
         let _ = pool.free(&RangeInclusive::new(0x1000, 0x17FF).unwrap());
         assert_eq!(
-            pool.allocate(0x800, 0x100, AllocPolicy::FirstMatch)
+            pool.allocate(0x800, 0x100, AllocPolicy::FirstMatch,NodeState::Ram)
                 .unwrap(),
             RangeInclusive::new(0x1000, 0x17FF).unwrap()
         );
@@ -248,11 +249,11 @@ mod tests {
     fn test_allow_range_size_one_left() {
         let mut pool = AddressAllocator::new(1, 1000).unwrap();
         assert_eq!(
-            pool.allocate(10, 2, AllocPolicy::FirstMatch).unwrap(),
+            pool.allocate(10, 2, AllocPolicy::FirstMatch,NodeState::Ram).unwrap(),
             RangeInclusive::new(2, 11).unwrap()
         );
         assert_eq!(
-            pool.allocate(1, 1, AllocPolicy::FirstMatch).unwrap(),
+            pool.allocate(1, 1, AllocPolicy::FirstMatch,NodeState::Ram).unwrap(),
             RangeInclusive::new(1, 1).unwrap()
         );
     }
@@ -262,7 +263,7 @@ mod tests {
         let mut pool = AddressAllocator::new(0x0, 0x1000).unwrap();
         //First allocation fails
         assert_eq!(
-            pool.allocate(0x2000, 0x100, AllocPolicy::FirstMatch)
+            pool.allocate(0x2000, 0x100, AllocPolicy::FirstMatch,NodeState::Ram)
                 .unwrap_err(),
             Error::ResourceNotAvailable
         );
@@ -274,7 +275,7 @@ mod tests {
         );
         // Now we try an allocation that should succeed.
         assert_eq!(
-            pool.allocate(0x4FE, 0x100, AllocPolicy::ExactMatch(0x500))
+            pool.allocate(0x4FE, 0x100, AllocPolicy::ExactMatch(0x500),NodeState::Ram)
                 .unwrap(),
             RangeInclusive::new(0x500, 0x9FD).unwrap()
         );
