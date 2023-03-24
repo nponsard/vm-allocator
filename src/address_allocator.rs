@@ -85,7 +85,7 @@ impl AddressAllocator {
     /// Manually allocates a new memory slot.
     /// Mostly used to add reserved memory slots.
     pub fn allocate_range(&mut self, range: RangeInclusive, node_state: NodeState) -> Result<()> {
-        self.interval_tree.insert(range, node_state)
+        self.interval_tree.allocate_at(range, node_state)
     }
 
     /// Deletes the specified memory slot or returns `ResourceNotAvailable` if

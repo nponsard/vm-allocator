@@ -556,7 +556,7 @@ impl IntervalTree {
             let key = RangeInclusive::new(range_start, node_key.end())?;
             let allocated_size = std::cmp::min(key.len(), remaining);
             let allocated_key = RangeInclusive::new(key.start(), key.start() + allocated_size - 1)?;
-            self.insert(allocated_key, node_state)?;
+            self.allocate_at(allocated_key, node_state)?;
             allocated.push(allocated_key);
             remaining -= allocated_size;
         }
@@ -571,7 +571,7 @@ impl IntervalTree {
         }
     }
 
-    pub fn insert(&mut self, key: RangeInclusive, node_state: NodeState) -> Result<()> {
+    fn insert(&mut self, key: RangeInclusive, node_state: NodeState) -> Result<()> {
         match self.root.take() {
             None => self.root = Some(Box::new(InnerNode::new(key, node_state))),
             Some(node) => self.root = Some(node.insert(key, node_state)?),
@@ -667,6 +667,54 @@ impl IntervalTree {
             )?;
         }
         Ok(result)
+    }
+
+    pub fn allocate_at(&mut self, key: RangeInclusive, node_state: NodeState) -> Result<()> {
+        // Return ResourceNotAvailable if we can not get a reference to the
+        // root node.
+        let root = self.root.as_ref().ok_or(Error::ResourceNotAvailable)?;
+        let node = root
+            .search_superset(&key)
+            .ok_or(Error::ResourceNotAvailable)?;
+
+        let node_key = node.key;
+
+
+        // Allocate a resource from the node, no need to split the candidate node.
+        if node_key.start() == key.start() && node_key.end() == key.end() {
+            self.mark_as_allocated(&node_key, node_state)?;
+            return Ok(());
+        }
+
+        // If we do not find a node that is a perfect match we delete the old
+        // node and insert three new nodes. The first node will represent the
+        // RangeInclusive [old_node.start, aligned_addr - 1] and will be marked as free.
+        // The second node will have the state NodeState::Allocated and is
+        // actually the requested memory slot. The last node will have the
+        // state NodeState::Free and is what is left from the old node.
+        self.delete(&node_key)?;
+        if key.start > node_key.start() {
+            self.insert(
+                RangeInclusive::new(
+                    node_key.start(),
+                    key.start().checked_sub(1).ok_or(Error::Overflow)?,
+                )?,
+                NodeState::Free,
+            )?;
+        }
+
+        self.insert(key, node_state)?;
+        if key.end() < node_key.end() {
+            self.insert(
+                RangeInclusive::new(
+                    key.end().checked_add(1).ok_or(Error::Overflow)?,
+                    node_key.end(),
+                )?,
+                NodeState::Free,
+            )?;
+        }
+
+        Ok(())
     }
 
     /// Free an allocated range.
