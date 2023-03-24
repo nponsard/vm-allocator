@@ -113,6 +113,23 @@ impl InnerNode {
         }
     }
 
+
+    /// Returns the nodes that are in the specified state.
+    pub fn get_nodes_with_state(&self, node_state: NodeState) -> Vec<&RangeInclusive> {
+        let mut nodes = Vec::new();
+        if self.node_state == node_state {
+            nodes.push(&self.key);
+        }
+        if let Some(left) = &self.left {
+            nodes.append(&mut left.get_nodes_with_state(node_state));
+        }
+        if let Some(right) = &self.right {
+            nodes.append(&mut right.get_nodes_with_state(node_state));
+        }
+        nodes
+    }
+
+
     /// Rotates the tree such that height difference between subtrees
     /// is not greater than abs(1).
     fn rotate(self: Box<Self>) -> Box<Self> {
@@ -539,6 +556,15 @@ impl IntervalTree {
             self.root = node.delete(key);
         }
         Ok(())
+    }
+
+
+    /// Returns the nodes that are in the specified state.
+    pub fn get_nodes_with_state(&self, node_state: NodeState) -> Vec<&RangeInclusive> {
+        match self.root {
+            None => vec![],
+            Some(ref node) => node.get_nodes_with_state(node_state),
+        }
     }
 
     /// This method implements the allocation logic for the address allocator.
