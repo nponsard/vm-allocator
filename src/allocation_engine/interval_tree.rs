@@ -559,6 +559,11 @@ impl IntervalTree {
 
             let range_end = align_down(node_key.end(), align)?;
 
+            if range_end>=range_start {
+                continue;
+            }
+
+
             let key = RangeInclusive::new(range_start, range_end)?;
             let allocated_size = std::cmp::min(key.len(), remaining);
             let allocated_key = RangeInclusive::new(key.start(), key.start() + allocated_size)?;
