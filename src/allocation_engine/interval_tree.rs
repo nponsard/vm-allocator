@@ -113,7 +113,6 @@ impl InnerNode {
         }
     }
 
-
     /// Returns the nodes that are in the specified state.
     pub fn get_nodes_with_state(&self, node_state: NodeState) -> Vec<&RangeInclusive> {
         let mut nodes = Vec::new();
@@ -128,7 +127,6 @@ impl InnerNode {
         }
         nodes
     }
-
 
     /// Rotates the tree such that height difference between subtrees
     /// is not greater than abs(1).
@@ -524,6 +522,48 @@ impl IntervalTree {
         }
     }
 
+    fn get_first_free_slot(&self) -> Result<&InnerNode> {
+        if let Some(node) = self.root.as_ref() {
+            let mut queue = vec![node];
+            while let Some(node) = queue.pop() {
+                if node.node_state.is_free() {
+                    return Ok(node);
+                }
+                if let Some(ref left) = node.left {
+                    queue.push(left);
+                }
+                if let Some(ref right) = node.right {
+                    queue.push(right);
+                }
+            }
+        }
+        Err(Error::ResourceNotAvailable)
+    }
+
+    pub fn allocate_fragmented(
+        &mut self,
+        size: u64,
+        align: u64,
+        node_state: NodeState,
+    ) -> Result<Vec<RangeInclusive>> {
+        let mut allocated = Vec::new();
+        let mut remaining = size;
+
+        while remaining > 0 {
+            let node = self.get_first_free_slot()?;
+            let node_key = node.key;
+            let range_start = align_up(node_key.start(), align)?;
+            let key = RangeInclusive::new(range_start, node_key.end())?;
+            let allocated_size = std::cmp::min(key.len(), remaining);
+            let allocated_key = RangeInclusive::new(key.start(), key.start() + allocated_size - 1)?;
+            self.insert(allocated_key, node_state)?;
+            allocated.push(allocated_key);
+            remaining -= allocated_size;
+        }
+
+        Ok(allocated)
+    }
+
     fn search_superset(&self, key: &RangeInclusive) -> Option<&InnerNode> {
         match self.root {
             None => None,
@@ -557,7 +597,6 @@ impl IntervalTree {
         }
         Ok(())
     }
-
 
     /// Returns the nodes that are in the specified state.
     pub fn get_nodes_with_state(&self, node_state: NodeState) -> Vec<&RangeInclusive> {

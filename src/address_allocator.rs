@@ -72,6 +72,16 @@ impl AddressAllocator {
         self.interval_tree.get_nodes_with_state(node_state)
     }
 
+    /// Allocate multiple memory slots from the start of the address space.
+    pub fn allocate_free_slots(
+        &mut self,
+        size: u64,
+        alignment: u64,
+        node_state: NodeState,
+    ) -> Result<Vec<RangeInclusive>> {
+        self.interval_tree.allocate_fragmented(size, alignment, node_state)
+    }
+
     /// Manually allocates a new memory slot.
     /// Mostly used to add reserved memory slots.
     pub fn allocate_range(&mut self, range: RangeInclusive, node_state: NodeState) -> Result<()> {
